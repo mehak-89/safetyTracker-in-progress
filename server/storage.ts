@@ -1,4 +1,6 @@
 import { trackers, emergencyContacts, locations, type Tracker, type InsertTracker, type EmergencyContact, type InsertEmergencyContact, type Location, type InsertLocation } from "@shared/schema";
+import { db } from "./db";
+import { eq } from "drizzle-orm";
 
 export interface IStorage {
   // Tracker operations
@@ -56,7 +58,11 @@ export class MemStorage implements IStorage {
 
     defaultContacts.forEach(contact => {
       const id = this.currentEmergencyContactId++;
-      this.emergencyContacts.set(id, { ...contact, id });
+      this.emergencyContacts.set(id, { 
+        ...contact, 
+        id, 
+        isActive: contact.isActive
+      });
     });
 
     // Add sample trackers for demonstration
@@ -98,7 +104,14 @@ export class MemStorage implements IStorage {
 
     sampleTrackers.forEach(tracker => {
       const id = this.currentTrackerId++;
-      this.trackers.set(id, { ...tracker, id, lastUpdate: new Date() });
+      this.trackers.set(id, { 
+        ...tracker, 
+        id, 
+        lastUpdate: new Date(),
+        status: tracker.status,
+        batteryLevel: tracker.batteryLevel,
+        isActive: tracker.isActive
+      });
     });
   }
 
@@ -116,7 +129,14 @@ export class MemStorage implements IStorage {
 
   async createTracker(insertTracker: InsertTracker): Promise<Tracker> {
     const id = this.currentTrackerId++;
-    const tracker: Tracker = { ...insertTracker, id, lastUpdate: new Date() };
+    const tracker: Tracker = { 
+      ...insertTracker, 
+      id, 
+      lastUpdate: new Date(),
+      status: insertTracker.status ?? "safe",
+      batteryLevel: insertTracker.batteryLevel ?? 100,
+      isActive: insertTracker.isActive ?? true
+    };
     this.trackers.set(id, tracker);
     return tracker;
   }
@@ -144,7 +164,11 @@ export class MemStorage implements IStorage {
 
   async createEmergencyContact(contact: InsertEmergencyContact): Promise<EmergencyContact> {
     const id = this.currentEmergencyContactId++;
-    const emergencyContact: EmergencyContact = { ...contact, id };
+    const emergencyContact: EmergencyContact = { 
+      ...contact, 
+      id,
+      isActive: contact.isActive ?? true
+    };
     this.emergencyContacts.set(id, emergencyContact);
     return emergencyContact;
   }
@@ -158,7 +182,12 @@ export class MemStorage implements IStorage {
 
   async addLocation(location: InsertLocation): Promise<Location> {
     const id = this.currentLocationId++;
-    const locationRecord: Location = { ...location, id, timestamp: new Date() };
+    const locationRecord: Location = { 
+      ...location, 
+      id, 
+      timestamp: new Date(),
+      locationName: location.locationName ?? null
+    };
     this.locations.set(id, locationRecord);
     return locationRecord;
   }
@@ -183,4 +212,94 @@ export class MemStorage implements IStorage {
   }
 }
 
-export const storage = new MemStorage();
+export class DatabaseStorage implements IStorage {
+  async getTracker(id: number): Promise<Tracker | undefined> {
+    const [tracker] = await db.select().from(trackers).where(eq(trackers.id, id));
+    return tracker || undefined;
+  }
+
+  async getTrackerByTrackerId(trackerId: string): Promise<Tracker | undefined> {
+    const [tracker] = await db.select().from(trackers).where(eq(trackers.trackerId, trackerId));
+    return tracker || undefined;
+  }
+
+  async getAllTrackers(): Promise<Tracker[]> {
+    return await db.select().from(trackers).where(eq(trackers.isActive, true));
+  }
+
+  async createTracker(insertTracker: InsertTracker): Promise<Tracker> {
+    const [tracker] = await db
+      .insert(trackers)
+      .values(insertTracker)
+      .returning();
+    return tracker;
+  }
+
+  async updateTracker(id: number, updates: Partial<InsertTracker>): Promise<Tracker | undefined> {
+    const [tracker] = await db
+      .update(trackers)
+      .set(updates)
+      .where(eq(trackers.id, id))
+      .returning();
+    return tracker || undefined;
+  }
+
+  async deleteTracker(id: number): Promise<boolean> {
+    const [tracker] = await db
+      .update(trackers)
+      .set({ isActive: false })
+      .where(eq(trackers.id, id))
+      .returning();
+    return !!tracker;
+  }
+
+  async getAllEmergencyContacts(): Promise<EmergencyContact[]> {
+    return await db.select().from(emergencyContacts).where(eq(emergencyContacts.isActive, true));
+  }
+
+  async createEmergencyContact(contact: InsertEmergencyContact): Promise<EmergencyContact> {
+    const [emergencyContact] = await db
+      .insert(emergencyContacts)
+      .values(contact)
+      .returning();
+    return emergencyContact;
+  }
+
+  async getLocationHistory(trackerId: string, limit: number = 10): Promise<Location[]> {
+    return await db
+      .select()
+      .from(locations)
+      .where(eq(locations.trackerId, trackerId))
+      .orderBy(locations.timestamp)
+      .limit(limit);
+  }
+
+  async addLocation(location: InsertLocation): Promise<Location> {
+    const [locationRecord] = await db
+      .insert(locations)
+      .values(location)
+      .returning();
+    return locationRecord;
+  }
+
+  async getStats(): Promise<{
+    activeTrackers: number;
+    safeLocations: number;
+    alerts: number;
+    emergencies: number;
+  }> {
+    const activeTrackers = await db.select().from(trackers).where(eq(trackers.isActive, true));
+    const safeLocations = activeTrackers.filter(t => t.status === "safe").length;
+    const alerts = activeTrackers.filter(t => t.status === "alert").length;
+    const emergencies = activeTrackers.filter(t => t.status === "emergency").length;
+
+    return {
+      activeTrackers: activeTrackers.length,
+      safeLocations,
+      alerts,
+      emergencies,
+    };
+  }
+}
+
+export const storage = new DatabaseStorage();
