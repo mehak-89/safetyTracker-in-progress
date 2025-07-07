@@ -1,5 +1,5 @@
 import { trackers, emergencyContacts, locations, type Tracker, type InsertTracker, type EmergencyContact, type InsertEmergencyContact, type Location, type InsertLocation } from "@shared/schema";
-import { db } from "./db";
+// import { db } from "./Firebase";
 import { eq } from "drizzle-orm";
 
 export interface IStorage {
